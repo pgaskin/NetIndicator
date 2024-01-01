@@ -153,42 +153,15 @@ public class NetIndicatorService extends Service {
         }
     }
 
-    private static final class ThroughputTracker {
-        public final String iface;
-        public long txRate, rxRate; // B/s
-        private long lastMillis, lastTxBytes, lastRxBytes;
-
-        public ThroughputTracker(String iface) {
-            this.iface = iface;
-        }
-
-        public void update() {
-            try {
-                final long millis = SystemClock.elapsedRealtime();
-                final long txBytes = TrafficStats.getTxBytes(iface);
-                final long rxBytes = TrafficStats.getRxBytes(iface);
-                if (millis <= lastMillis || txBytes <= lastTxBytes || rxBytes <= lastRxBytes) {
-                    txRate = rxRate = 0;
-                } else {
-                    txRate = (long)((double)(txBytes - lastTxBytes) / ((double)(millis - lastMillis)/1000));
-                    rxRate = (long)((double)(rxBytes - lastRxBytes) / ((double)(millis - lastMillis)/1000));
-                }
-                lastMillis = millis;
-                lastTxBytes = txBytes;
-                lastRxBytes = rxBytes;
-            } catch (Exception ex) {
-                txRate = rxRate = 0;
-                lastMillis = lastTxBytes = lastRxBytes = 0;
-            }
-        }
-    }
-
     private static final class NetworkThroughputTracker {
-        public long txRate, rxRate;
+        public long txRate, rxRate; // B/s
 
         private final static int MAX_NETWORKS = 64;
         private final Network[] networks = new Network[MAX_NETWORKS];
-        private final ThroughputTracker[] throughputTrackers = new ThroughputTracker[MAX_NETWORKS];
+        private final String[] interfaces = new String[MAX_NETWORKS];
+        private final long[] lastMillis = new long[MAX_NETWORKS];
+        private final long[] lastTxBytes = new long[MAX_NETWORKS];
+        private final long[] lastRxBytes = new long[MAX_NETWORKS];
 
         public void set(Network net, LinkProperties lp) {
             int idx = -1;
@@ -206,11 +179,12 @@ public class NetIndicatorService extends Service {
                 final String iface = lp == null ? null : lp.getInterfaceName();
                 if (iface == null) {
                     networks[idx] = null;
-                    throughputTrackers[idx] = null;
+                    interfaces[idx] = null;
                 } else {
                     networks[idx] = net;
-                    if (throughputTrackers[idx] == null || !throughputTrackers[idx].iface.equals(iface)) {
-                        throughputTrackers[idx] = new ThroughputTracker(iface);
+                    if (!iface.equals(interfaces[idx])) {
+                        interfaces[idx] = iface;
+                        lastMillis[idx] = lastTxBytes[idx] = lastRxBytes[idx] = 0;
                     }
                 }
             }
@@ -220,10 +194,23 @@ public class NetIndicatorService extends Service {
             txRate = 0;
             rxRate = 0;
             for (int i = 0; i < MAX_NETWORKS; i++) {
-                if (throughputTrackers[i] != null) {
-                    throughputTrackers[i].update();
-                    txRate += throughputTrackers[i].txRate;
-                    rxRate += throughputTrackers[i].rxRate;
+                final String iface = interfaces[i];
+                if (iface != null) {
+                    try {
+                        final long millis = SystemClock.elapsedRealtime();
+                        final long txBytes = TrafficStats.getTxBytes(iface);
+                        final long rxBytes = TrafficStats.getRxBytes(iface);
+                        if (millis > lastMillis[i] && txBytes > lastTxBytes[i] && rxBytes > lastRxBytes[i]) {
+                            txRate += (long)((double)(txBytes - lastTxBytes[i]) / ((double)(millis - lastMillis[i])/1000));
+                            rxRate += (long)((double)(rxBytes - lastRxBytes[i]) / ((double)(millis - lastMillis[i])/1000));
+                        }
+                        lastMillis[i] = millis;
+                        lastTxBytes[i] = txBytes;
+                        lastRxBytes[i] = rxBytes;
+                    } catch (Exception ex) {
+                        networks[i] = null;
+                        interfaces[i] = null;
+                    }
                 }
             }
         }
@@ -291,9 +278,7 @@ public class NetIndicatorService extends Service {
             @Override
             public void onLinkPropertiesChanged(Network net, LinkProperties lp) {
                 // note: this will always be called for every new network (i.e., after first seen, or seen after lost)
-                Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged (" + net + ")");
-                final String iface = lp.getInterfaceName();
-                Log.d(TAG, "... LinkProperties.getInterfaceName = " + (iface != null ? iface : "(null)"));
+                Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged network=" + net + " iface=" + (lp.getInterfaceName() != null ? lp.getInterfaceName() : "(null)"));
                 tracker.set(net, lp);
             }
 
