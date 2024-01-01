@@ -45,21 +45,23 @@ public class NetIndicatorService extends Service {
     private static final int UPDATE_INTERVAL_SECONDS = 2;
 
     private static final class ThroughputNotification {
-        private final Context context;
         private final NotificationManager notificationManager;
 
         private final Canvas icon;
-        private final int iconSize;
         private final Bitmap iconBitmap;
         private final Paint iconPaint;
-        private final int iconTextSpaceTop, iconTextSpaceBottom, iconTextSpace; // extra space above/below numbers
+        private final float iconTextX, iconTextY1, iconTextY2;
         private final StringBuilder text = new StringBuilder();
+        private final Notification.Builder notification;
 
         public ThroughputNotification(Context context) {
-            this.context = context;
             notificationManager = context.getSystemService(NotificationManager.class);
 
-            iconSize = (int) context.getResources().getDisplayMetrics().density * 24;
+            // https://stackoverflow.com/questions/4265595/android-status-bar-expects-icons-of-size-25x25dp-while-guidelines-recommend-32x3
+            // - statusbar icon is 24x24
+            // - 2dp inset, so 20x20 safe area
+            // - note: density is coarse (iconSize will always be a whole number)
+            final int iconSize = (int) context.getResources().getDisplayMetrics().density * 24;
 
             iconPaint = new Paint();
             iconPaint.setColor(Color.WHITE);
@@ -70,12 +72,20 @@ public class NetIndicatorService extends Service {
             // https://fonts.googleapis.com/css2?family=Asap:wdth,wght@75,450&text=1234567890%E2%86%93%E2%86%91%20GMKgmkBbs/
 
             final Paint.FontMetrics icPaintMetrics = iconPaint.getFontMetrics();
-            iconTextSpaceTop = (int) (icPaintMetrics.top - icPaintMetrics.ascent);
-            iconTextSpaceBottom = (int) (icPaintMetrics.bottom - icPaintMetrics.descent);
-            iconTextSpace = iconTextSpaceTop + iconTextSpaceBottom;
+            final float iconTextSpaceTop = icPaintMetrics.top - icPaintMetrics.ascent; // extra space above numbers
+            final float iconTextSpaceBottom = icPaintMetrics.bottom - icPaintMetrics.descent; // extra space below numbers
+            final float iconTextSpace = iconTextSpaceTop + iconTextSpaceBottom;
+            iconTextX = (float) iconSize/2;
+            iconTextY1 = (float) iconSize/2*1 - iconTextSpaceTop + iconTextSpace/3;
+            iconTextY2 = (float) iconSize/2*2 + iconTextSpaceBottom - iconTextSpace/3;
 
             iconBitmap = Bitmap.createBitmap(iconSize, iconSize, Bitmap.Config.ARGB_8888);
             icon = new Canvas(iconBitmap);
+
+            notification = new Notification.Builder(context, NOTIFICATION_CHANNEL_THROUGHPUT)
+                    .setSortKey(String.valueOf(NOTIFICATION_ID_THROUGHPUT))
+                    .setOnlyAlertOnce(true)
+                    .setOngoing(true);
         }
 
         private boolean lastVisible = false;
@@ -110,6 +120,20 @@ public class NetIndicatorService extends Service {
                 nU = mU ? (nU + 500) / 1000 : nU;
                 nD = mD ? (nD + 500) / 1000 : nD;
 
+                icon.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
+
+                text.setLength(0);
+                text.append(nU);
+                text.append(nU < 100 ? " " : "");
+                text.append(mU ? "M" : "K");
+                icon.drawText(text, 0, text.length(), iconTextX, iconTextY1, iconPaint);
+
+                text.setLength(0);
+                text.append(nD);
+                text.append(nD < 100 ? " " : "");
+                text.append(mD ? "M" : "K");
+                icon.drawText(text, 0, text.length(), iconTextX, iconTextY2, iconPaint);
+
                 text.setLength(0);
                 text.append("Network • ");
                 text.append("T: ");
@@ -119,19 +143,13 @@ public class NetIndicatorService extends Service {
                 text.append("R: ");
                 text.append(nD);
                 text.append(mD ? " Mb/s" : " Kb/s");
-
-                icon.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-                icon.drawText(nU + (nU < 100 ? " " : "") + (mU ? "M" : "K"), (float) iconSize/2, (float) iconSize/2*1 - iconTextSpaceTop + (float) iconTextSpace/3, iconPaint);
-                icon.drawText(nD + (nD < 100 ? " " : "") + (mD ? "M" : "K"), (float) iconSize/2, (float) iconSize/2*2 + iconTextSpaceBottom - (float) iconTextSpace/3, iconPaint);
             }
 
-            notificationManager.notify(NOTIFICATION_ID_THROUGHPUT, new Notification.Builder(context, NOTIFICATION_CHANNEL_THROUGHPUT)
-                    .setSmallIcon(Icon.createWithBitmap(iconBitmap))
-                    .setContentTitle(text)
-                    .setOnlyAlertOnce(true)
-                    .setOngoing(true)
-                    .setSortKey(String.valueOf(NOTIFICATION_ID_THROUGHPUT))
-                    .build());
+            final Bitmap ic = iconBitmap.copy(iconBitmap.getConfig(), false); // need to copy the bitmap into an immutable one so Icon doesn't do its own copy
+            notification.setContentTitle(text);
+            notification.setSmallIcon(Icon.createWithBitmap(ic));
+            notificationManager.notify(NOTIFICATION_ID_THROUGHPUT, notification.build());
+            ic.recycle(); // we can recycle the bitmap after it's been parceled
             lastVisible = true;
         }
     }
