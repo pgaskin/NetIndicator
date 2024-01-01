@@ -26,7 +26,6 @@ import android.net.TrafficStats;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.PowerManager;
-import android.os.StrictMode;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
@@ -184,10 +183,56 @@ public class NetIndicatorService extends Service {
         }
     }
 
+    private static final class NetworkThroughputTracker {
+        public long txRate, rxRate;
+
+        private final static int MAX_NETWORKS = 64;
+        private final Network[] networks = new Network[MAX_NETWORKS];
+        private final ThroughputTracker[] throughputTrackers = new ThroughputTracker[MAX_NETWORKS];
+
+        public void set(Network net, LinkProperties lp) {
+            int idx = -1;
+            for (int i = 0; i < MAX_NETWORKS; i++) {
+                if (networks[i] == null) {
+                    idx = i;
+                } else if (networks[i].equals(net)) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx == -1) {
+                Log.w(TAG, "max networks for NetworkThroughputTracker reached, ignoring network " + net);
+            } else {
+                final String iface = lp == null ? null : lp.getInterfaceName();
+                if (iface == null) {
+                    networks[idx] = null;
+                    throughputTrackers[idx] = null;
+                } else {
+                    networks[idx] = net;
+                    if (throughputTrackers[idx] == null || !throughputTrackers[idx].iface.equals(iface)) {
+                        throughputTrackers[idx] = new ThroughputTracker(iface);
+                    }
+                }
+            }
+        }
+
+        public void update() {
+            txRate = 0;
+            rxRate = 0;
+            for (int i = 0; i < MAX_NETWORKS; i++) {
+                if (throughputTrackers[i] != null) {
+                    throughputTrackers[i].update();
+                    txRate += throughputTrackers[i].txRate;
+                    rxRate += throughputTrackers[i].rxRate;
+                }
+            }
+        }
+    }
+
     private Handler handler;
     private ConnectivityManager.NetworkCallback networkCallback;
     private ThroughputNotification notification;
-    private HashMap<Network, ThroughputTracker> networks;
+    private NetworkThroughputTracker tracker;
     private BroadcastReceiver pauseReceiver;
     private Runnable updateRunnable;
 
@@ -236,28 +281,26 @@ public class NetIndicatorService extends Service {
 
         notification = new ThroughputNotification(this);
 
-        networks = new HashMap<>();
+        tracker = new NetworkThroughputTracker();
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(Network net) {
-                Log.d(TAG, "NetworkCallback.onAvailable (" + net.getNetworkHandle() + ")");
+                Log.d(TAG, "NetworkCallback.onAvailable (" + net + ")");
             }
 
             @Override
             public void onLinkPropertiesChanged(Network net, LinkProperties lp) {
                 // note: this will always be called for every new network (i.e., after first seen, or seen after lost)
-                Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged (" + net.getNetworkHandle() + ")");
+                Log.d(TAG, "NetworkCallback.onLinkPropertiesChanged (" + net + ")");
                 final String iface = lp.getInterfaceName();
                 Log.d(TAG, "... LinkProperties.getInterfaceName = " + (iface != null ? iface : "(null)"));
-                if (iface != null) {
-                    networks.put(net, new ThroughputTracker(iface));
-                }
+                tracker.set(net, lp);
             }
 
             @Override
             public void onLost(Network net) {
-                Log.d(TAG, "NetworkCallback.onLost (" + net.getNetworkHandle() + ")");
-                networks.remove(net);
+                Log.d(TAG, "NetworkCallback.onLost (" + net + ")");
+                tracker.set(net, null);
             }
         };
         getSystemService(ConnectivityManager.class).registerNetworkCallback(
@@ -269,14 +312,8 @@ public class NetIndicatorService extends Service {
         updateRunnable = new Runnable() {
             @Override
             public void run() {
-                long txRate = 0;
-                long rxRate = 0;
-                for (final ThroughputTracker tracker : networks.values()) {
-                    tracker.update();
-                    txRate += tracker.txRate;
-                    rxRate += tracker.rxRate;
-                }
-                notification.update(txRate, rxRate);
+                tracker.update();
+                notification.update(tracker.txRate, tracker.rxRate);
                 handler.postDelayed(this, UPDATE_INTERVAL_SECONDS * 1000);
             }
         };
@@ -325,10 +362,6 @@ public class NetIndicatorService extends Service {
                 handler.removeCallbacks(updateRunnable);
             }
             handler = null;
-        }
-        if (networks != null) {
-            networks.clear();
-            networks = null;
         }
         if (notification != null) {
             notification.update();
