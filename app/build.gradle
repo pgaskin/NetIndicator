@@ -10,8 +10,8 @@ android {
         applicationId "net.pgaskin.netindicator"
         minSdk 33
         targetSdk 34
-        versionCode 2
-        versionName "2"
+        versionCode 3
+        versionName "3"
     }
 
     buildTypes {
