@@ -352,6 +352,14 @@ public class NetIndicatorService extends Service {
                             interfaces[idx] = iface;
                             lastMillis[idx] = lastTxBytes[idx] = lastRxBytes[idx] = 0;
                         }
+                        // seems like it's possible for an interface to be assigned to a new network without onLost being called on the old one, so work around that by removing old ones with the same interface
+                        for (int i = 0; i < MAX_NETWORKS; i++) {
+                            if (i != idx && networks[i] != null && iface.equals(interfaces[i])) {
+                                Log.w(TAG, "network " + networks[i] + " is using interface " + iface + " of new network " + net + "; dropping the old one");
+                                networks[i] = null;
+                                interfaces[i] = null;
+                            }
+                        }
                     }
                 }
             }
